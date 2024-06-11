@@ -19,7 +19,7 @@ build = {
     },
     install = {
         bin = {
-            --"svad",
+            "src/svad.lua",
         },
     },
 }
