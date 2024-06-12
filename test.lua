@@ -26,7 +26,7 @@ do
         command = "ld $ldflags $in -o $out",
     }
 
-    build:buildPipe {
+    build:pipe {
         gcc {
             input = "main.c",
             output = svad.toExtension("o"),
@@ -34,8 +34,7 @@ do
         ld {
             output = "main",
         },
-        build:buildCommand {
-            command = "objcopy -O binary $in $out",
+        build:command("objcopy -O binary $in $out") {
             output = "main.bin"
         }
     }
@@ -50,7 +49,7 @@ do
         cflags = "-I.",
     }
 
-    build:buildPipe {
+    build:pipe {
         rules.cc {
             input = "main.c",
             output = svad.toExtension("o"),

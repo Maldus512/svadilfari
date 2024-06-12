@@ -1,19 +1,19 @@
 ---@diagnostic disable: redefined-local
 
----@alias BuildStepBuilder fun(args: {input:string, output : (string | fun(string): string), implicitDeps: table?, env:table}) : BuildStep
+---@alias BuildStepFactory fun(args: {input:string, output : (string | fun(string): string), implicitDeps: table?, env:table}) : BuildStep
 ---@alias Rule { command: string, env: table? }
 ---@alias BuildStep { rule: string, input: string?, output: (string | fun(string): string), implicitDeps: table?, env: table? }
 ---@alias BuildCommand { command: string, input: string?, output: (string | fun(string): string), implicitDeps: table? }
 
 ---@class BuildConfiguration
 ---@field env table<string,string>
----@field rule fun(self: BuildConfiguration, rule: (string | {name: string, command: string, env:table?})): BuildStepBuilder
----@field buildStep fun(self: BuildConfiguration, buildStep: BuildStep): nil
----@field buildCommand fun(self: BuildConfiguration, buildCommand: BuildCommand): nil
----@field buildPipe fun(self: BuildConfiguration, buildSteps: BuildStep[]): nil
----@field getRule fun(self: BuildConfiguration, name: string): BuildStepBuilder
+---@field rule fun(self: BuildConfiguration, rule: {name: string, command: string, env:table?}): BuildStepFactory
+---@field command fun(self: BuildConfiguration, command: string): BuildStepFactory
+---@field step fun(self: BuildConfiguration, buildStep: BuildStep): nil
+---@field pipe fun(self: BuildConfiguration, buildSteps: BuildStep[]): nil
+---@field getRule fun(self: BuildConfiguration, name: string): BuildStepFactory
 ---@field toStringGenerator fun(self: BuildConfiguration): thread
----@field addCComponent fun(self: BuildConfiguration, args: {cc: string?, ld: string?, cflags: string?, ldflags: string?}): {cc:BuildStepBuilder, ld: BuildStepBuilder}
+---@field addCComponent fun(self: BuildConfiguration, args: {cc: string?, ld: string?, cflags: string?, ldflags: string?}): {cc:BuildStepFactory, ld: BuildStepFactory}
 
 
 ---@param extension string
@@ -117,21 +117,17 @@ return {
              Public methods
             ]]
             rule = function(self, rule)
-                if type(rule) == "string" then
-                    local name = commandName(rule)
-                    if privateSelf.rules[name] ~= nil then
-                        print("Warning: overriding rule named " .. name)
-                    end
-                    privateSelf.rules[name] = { command = rule }
-                    return self:getRule(name)
-                else
-                    local name = rule.name or commandName(rule.command)
-                    if privateSelf.rules[name] ~= nil then
-                        print("Warning: overriding rule named " .. rule.name)
-                    end
-                    privateSelf.rules[name] = { command = rule.command, env = rule.env }
-                    return self:getRule(name)
+                if privateSelf.rules[rule.name] ~= nil then
+                    print("Warning: overriding rule named " .. rule.name)
                 end
+                privateSelf.rules[rule.name] = { command = rule.command, env = rule.env }
+                return self:getRule(rule.name)
+            end,
+            command = function(self, command)
+                return self:rule {
+                    name = commandName(command),
+                    command = command,
+                }
             end,
             getRule = function(_, name)
                 assert(privateSelf.rules[name], string.format("No rule with name %s!", name))
@@ -143,24 +139,10 @@ return {
                     return buildStep
                 end
             end,
-            buildStep = function(self, buildStep)
-                self:buildPipe { buildStep }
+            step = function(self, buildStep)
+                self:pipe { buildStep }
             end,
-            buildCommand = function(self, buildCommand)
-                local name = commandName(buildCommand.command)
-
-                local rule = self:rule {
-                    name = name,
-                    command = buildCommand.command,
-                }
-
-                return rule {
-                    input = buildCommand.input,
-                    output = buildCommand.output,
-                    implicitDeps = buildCommand.implicitDeps,
-                }
-            end,
-            buildPipe = function(_, buildSteps)
+            pipe = function(self, buildSteps)
                 local previousInput = nil
 
                 for _, buildStep in ipairs(buildSteps) do
