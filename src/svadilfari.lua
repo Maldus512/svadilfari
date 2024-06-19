@@ -1,18 +1,21 @@
 ---@diagnostic disable: redefined-local
 
----@alias BuildStepFactory fun(args: {input:string, output : (string | fun(string): string), implicitDeps: table?, env:table}) : BuildStep
+---@alias BuildStepFactory fun(args: {input: (string|string[]), target : (string | fun(string): string), alias: string? dependencies: table?, env:table?}) : BuildStep
 ---@alias Rule { command: string, env: table? }
----@alias BuildStep { rule: string, input: string?, output: (string | fun(string): string), implicitDeps: table?, env: table? }
----@alias BuildCommand { command: string, input: string?, output: (string | fun(string): string), implicitDeps: table? }
+---@alias BuildStep { rule: string, input: (string|string[])?, target: (string | fun(string): string), alias: string?, dependencies: table?, env: table? }
 
 ---@class BuildConfiguration
 ---@field env table<string,string>
 ---@field rule fun(self: BuildConfiguration, rule: {name: string, command: string, env:table?}): BuildStepFactory
 ---@field command fun(self: BuildConfiguration, command: string): BuildStepFactory
----@field step fun(self: BuildConfiguration, buildStep: BuildStep): nil
----@field pipe fun(self: BuildConfiguration, buildSteps: BuildStep[]): nil
+---@field step fun(self: BuildConfiguration, buildStep: BuildStep): string
+---@field alias fun(self: BuildConfiguration, name: string, target: string)
+---@field run fun(self: BuildConfiguration, args: {name: string, input: (string|string[])?, dependencies: string?, command: string})
+---@field pipe fun(self: BuildConfiguration, buildSteps: BuildStep[]): string[]
+---@field defaults fun(self: BuildConfiguration, targets: string[])
 ---@field getRule fun(self: BuildConfiguration, name: string): BuildStepFactory
 ---@field toStringGenerator fun(self: BuildConfiguration): thread
+---@field export fun(self: BuildConfiguration, path: string)
 ---@field addCComponent fun(self: BuildConfiguration, args: {cc: string?, ld: string?, cflags: string?, ldflags: string?}): {cc:BuildStepFactory, ld: BuildStepFactory}
 
 
@@ -70,7 +73,19 @@ return {
             rules = {},
             ---@type BuildStep[]
             buildSteps = {},
+            ---@type string[]
+            defaults = {},
         }
+
+        local getInput = function(input)
+            if type(input) == "table" then
+                return table.concat(args.input --[[@as string[] ]], " ")
+            elseif type(input) == "string" then
+                return input
+            else
+                return ""
+            end
+        end
 
         ---Join two filesystem paths
         ---@param ... string?[]
@@ -84,13 +99,20 @@ return {
             return result:gsub("/+", "/")
         end
 
+        local getBasedPath
         ---Get the path starting with base, do nothing if it's already the case
         ---@param base string
-        ---@param path string?
+        ---@param path (string|string[])?
         ---@return string?
-        local getBasedPath = function(base, path)
+        getBasedPath = function(base, path)
             if path == nil then
                 return nil
+            elseif type(path) == "table" then
+                local result = {}
+                for _, v in ipairs(path) do
+                    table.insert(result, getBasedPath(base, v))
+                end
+                return table.concat(result, " ")
             elseif path:match("^" .. base) then
                 return path
             else
@@ -101,7 +123,7 @@ return {
         local commandName = function(command)
             local simpleName = command:match("^%S+")
             if privateSelf.rules[simpleName] then
-                return string.format([["%s"]], command)
+                return command:gsub("[%s%p]", "_")
             else
                 return simpleName
             end
@@ -132,6 +154,7 @@ return {
             getRule = function(_, name)
                 assert(privateSelf.rules[name], string.format("No rule with name %s!", name))
                 return function(args)
+                    assert(args.target, "Unspecified target!")
                     local buildStep = { rule = name }
                     for k, v in pairs(args) do
                         buildStep[k] = v
@@ -140,36 +163,70 @@ return {
                 end
             end,
             step = function(self, buildStep)
-                self:pipe { buildStep }
+                return (self:pipe { buildStep })[1]
+            end,
+            alias = function(_, name, other)
+                table.insert(privateSelf.buildSteps, {
+                    rule = "phony",
+                    input = other,
+                    target = name,
+                })
+            end,
+            run = function(self, args)
+                assert(args.name, "Run target must have a (humanly readable) name!")
+                assert(args.command, "Run target must do something!")
+
+                self:rule {
+                    name = args.name,
+                    command = args.command
+                }
+
+                table.insert(privateSelf.buildSteps, {
+                    rule = args.name,
+                    input = getInput(args.input),
+                    target = args.name,
+                    dependencies = args.dependencies,
+                })
             end,
             pipe = function(self, buildSteps)
                 local previousInput = nil
+                local outputsList = {}
 
                 for _, buildStep in ipairs(buildSteps) do
                     if buildStep.input == nil then
                         buildStep.input = previousInput
                     end
 
-                    local output = buildStep.output
-                    if type(output) == "function" then
-                        output = output(buildStep.input)
+                    local target = buildStep.target --[[ @as string ]]
+                    if type(buildStep.target) == "function" then
+                        target = buildStep.target(buildStep.input)
                     end
 
                     local input = getBasedPath(io.popen("pwd"):read(), buildStep.input)
-                    output = getBasedPath(privateSelf.buildFolder, output) --[[@as string]]
+                    target = getBasedPath(privateSelf.buildFolder, target) --[[@as string]]
 
                     table.insert(privateSelf.buildSteps, {
                         rule = buildStep.rule,
                         input = input,
-                        output = output,
-                        implicitDeps = buildStep.implicitDeps,
+                        target = target,
+                        dependencies = buildStep.dependencies,
                         env = buildStep.env,
                     })
 
-                    previousInput = output
+                    if buildStep.alias then
+                        self:alias(buildStep.alias, target)
+                    end
+
+                    previousInput = target
+                    table.insert(outputsList, target)
                 end
 
-                return previousInput --[[@as string]]
+                return outputsList
+            end,
+            defaults = function(_, targets)
+                for _, v in ipairs(targets) do
+                    table.insert(privateSelf.defaults, v)
+                end
             end,
             toStringGenerator = function(self)
                 return coroutine.create(function()
@@ -191,10 +248,10 @@ return {
                     end
 
                     for _, buildStep in ipairs(privateSelf.buildSteps) do
-                        local build = string.format("build %s: %s %s", buildStep.output, buildStep.rule, buildStep.input)
-                        if buildStep.implicitDeps ~= nil then
+                        local build = string.format("build %s: %s %s", buildStep.target, buildStep.rule, buildStep.input)
+                        if buildStep.dependencies ~= nil then
                             build = build .. " |"
-                            for _, dep in ipairs(buildStep.implicitDeps) do
+                            for _, dep in ipairs(buildStep.dependencies) do
                                 build = build .. " " .. dep
                             end
                         end
@@ -205,7 +262,30 @@ return {
                         end
                         coroutine.yield("\n")
                     end
+
+                    if #privateSelf.defaults > 0 then
+                        coroutine.yield("default " .. table.concat(privateSelf.defaults, " "))
+                    end
+
+                    coroutine.yield("\n")
                 end)
+            end,
+            export = function(self, path)
+                local file = io.open(path, "w")
+                if file == nil then
+                    print(string.format("Could not create %s!", path))
+                else
+                    local generator = self:toStringGenerator()
+
+                    while coroutine.status(generator) ~= "dead" do
+                        local _, value = coroutine.resume(generator)
+                        if value ~= nil then
+                            file:write(value)
+                        end
+                    end
+
+                    file:close()
+                end
             end,
             -- Utility methods
             addCComponent = function(self, args)

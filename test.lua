@@ -29,13 +29,13 @@ do
     build:pipe {
         gcc {
             input = "main.c",
-            output = svad.toExtension("o"),
+            target = svad.toExtension("o"),
         },
         ld {
-            output = "main",
+            target = "main",
         },
         build:command("objcopy -O binary $in $out") {
-            output = "main.bin"
+            target = "main.bin"
         }
     }
 
@@ -52,10 +52,10 @@ do
     build:pipe {
         rules.cc {
             input = "main.c",
-            output = svad.toExtension("o"),
+            target = svad.toExtension("o"),
         },
         rules.ld {
-            output = "main",
+            target = "main",
         },
     }
 

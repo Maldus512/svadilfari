@@ -1,7 +1,7 @@
 package = "Svadilfari"
 version = "0.1-1"
 source = {
-   url = "https://github.com/Maldus512/svadilfari.git" -- We don't have one yet
+   url = "git://github.com/Maldus512/svadilfari"
 }
 description = {
    summary = "A simple and effective build configuration tool",
@@ -9,7 +9,7 @@ description = {
    license = "MIT" -- or whatever you like
 }
 dependencies = {
-   "lua >= 5.1, < 5.4"
+   "lua >= 5.4"
    -- If you depend on other rocks, add them here
 }
 build = {
