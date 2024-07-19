@@ -1,12 +1,39 @@
 #!/usr/bin/env lua
 
+local getTargets = function(ninjaFile)
+    local output = assert(io.popen(string.format("ninja -f %s -t targets", ninjaFile)), "Could not run ninja!")
+    if output == nil then
+        return {}
+    end
+    local targetLines = {}
+    local line = output:read()
+    while line do
+        local target = string.match(line, "^(%S+):")
+        table.insert(targetLines, target)
+        line = output:read()
+    end
+
+    local _, _, code = output:close()
+    if code ~= 0 then
+        print("Could not query ninja for targets!")
+    end
+    return targetLines
+end
+
 local printHelp = function(commands)
     print("Usage:")
     print("  svad.lua [command]")
     print("")
     print("COMMANDS")
     for name, command in pairs(commands) do
-        print(string.format("  %-15s%s", name, type(command) == "table" and command.description or "" or ""))
+        if name ~= "ninja" then
+            print(string.format("  %-15s%s", name, type(command) == "table" and command.description or "" or ""))
+        end
+    end
+    if commands.ninja then
+        local targets = getTargets(commands.ninja)
+        print("")
+        print(string.format("Ninja targets: %s", table.concat(targets, ", ")))
     end
 end
 
@@ -50,6 +77,16 @@ local main = function()
                     end
                 end
 
+                if value.ninja then
+                    local targets = getTargets(value.ninja)
+                    for _, target in ipairs(targets) do
+                        if target == arg[1] then
+                            runWithOutput(string.format("ninja -f %s %s", value.ninja, target))
+                            return
+                        end
+                    end
+                end
+
                 print("Unrecognized command: " .. arg[1])
                 print("")
                 printHelp(value)
@@ -60,7 +97,7 @@ local main = function()
         end
     else
         print("Could not open build.lua!")
-        print(error)
+        print(status, value)
     end
 end
 

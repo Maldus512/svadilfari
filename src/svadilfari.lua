@@ -12,11 +12,11 @@
 ---@field alias fun(self: BuildConfiguration, name: string, target: string)
 ---@field run fun(self: BuildConfiguration, args: {name: string, input: (string|string[])?, dependencies: string?, command: string})
 ---@field pipe fun(self: BuildConfiguration, buildSteps: BuildStep[]): string[]
----@field defaults fun(self: BuildConfiguration, targets: string[])
+---@field defaults fun(self: BuildConfiguration, targets: string[] | string)
 ---@field getRule fun(self: BuildConfiguration, name: string): BuildStepFactory
 ---@field toStringGenerator fun(self: BuildConfiguration): thread
 ---@field export fun(self: BuildConfiguration, path: string)
----@field addCComponent fun(self: BuildConfiguration, args: {cc: string?, ld: string?, cflags: string?, ldflags: string?}): {cc:BuildStepFactory, ld: BuildStepFactory}
+---@field addCComponent fun(self: BuildConfiguration, args: {sourceDirectory:string?, app: string?, cc: string?, ld: string?, cflags: string?, ldflags: string?}): {cc:BuildStepFactory, ld: BuildStepFactory}
 
 
 ---@param extension string
@@ -96,7 +96,8 @@ return {
             for _, path in ipairs(args) do
                 result = result .. "/" .. path
             end
-            return result:gsub("/+", "/")
+            result = string.gsub(result, "/+", "/")
+            return result
         end
 
         local getBasedPath
@@ -110,13 +111,17 @@ return {
             elseif type(path) == "table" then
                 local result = {}
                 for _, v in ipairs(path) do
-                    table.insert(result, getBasedPath(base, v))
+                    local basedPath = getBasedPath(base, v)
+                    table.insert(result, basedPath)
                 end
                 return table.concat(result, " ")
-            elseif path:match("^" .. base) then
-                return path
             else
-                return join(base, path)
+                local start, end_index = path:find(base, 1, true)
+                if start == 1 then
+                    return path
+                else
+                    return join(base, path)
+                end
             end
         end
 
@@ -168,8 +173,8 @@ return {
             alias = function(_, name, other)
                 table.insert(privateSelf.buildSteps, {
                     rule = "phony",
-                    input = other,
-                    target = name,
+                    input = name,
+                    target = other,
                 })
             end,
             run = function(self, args)
@@ -224,8 +229,12 @@ return {
                 return outputsList
             end,
             defaults = function(_, targets)
-                for _, v in ipairs(targets) do
-                    table.insert(privateSelf.defaults, v)
+                if type(targets) == "table" then
+                    for _, v in ipairs(targets) do
+                        table.insert(privateSelf.defaults, v)
+                    end
+                else
+                    table.insert(privateSelf.defaults, targets)
                 end
             end,
             toStringGenerator = function(self)
@@ -319,7 +328,30 @@ return {
                 local cc = self:getRule("cc")
                 local ld = self:getRule("ld")
 
-                return { cc = cc, ld = ld }
+                local compileC = function(path)
+                    return self:step(cc {
+                        input = path,
+                        target = toExtension("o")
+                    })
+                end
+                local objects = {}
+
+                if args.sourceDirectory then
+                    for _, source in pairs(listFilesOfType(args.sourceDirectory, "c")) do
+                        local object = compileC(source)
+                        table.insert(objects, object)
+                    end
+                end
+
+                local binary = nil
+                if args.app and #objects > 0 then
+                    binary = self:step(ld {
+                        input = objects,
+                        target = args.app,
+                    })
+                end
+
+                return { cc = cc, ld = ld, objects = objects, binary = binary }
             end,
         }
 
