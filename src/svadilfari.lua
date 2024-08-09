@@ -173,8 +173,8 @@ return {
             alias = function(_, name, other)
                 table.insert(privateSelf.buildSteps, {
                     rule = "phony",
-                    input = name,
-                    target = other,
+                    input = other,
+                    target = name,
                 })
             end,
             run = function(self, args)
