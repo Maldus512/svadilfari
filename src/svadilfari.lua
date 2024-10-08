@@ -1,6 +1,6 @@
 ---@diagnostic disable: redefined-local
 
----@alias BuildStepFactory fun(args: {input: (string|string[]), target : (string | fun(string): string), alias: string? dependencies: table?, env:table?}) : BuildStep
+---@alias BuildStepFactory fun(args: {input: (string|string[]), target : (string | fun(string): string), alias: string?, dependencies: table?, env:table?}) : BuildStep
 ---@alias Rule { command: string, env: table? }
 ---@alias BuildStep { rule: string, input: (string|string[])?, target: (string | fun(string): string), alias: string?, dependencies: table?, env: table? }
 
@@ -16,7 +16,7 @@
 ---@field getRule fun(self: BuildConfiguration, name: string): BuildStepFactory
 ---@field toStringGenerator fun(self: BuildConfiguration): thread
 ---@field export fun(self: BuildConfiguration, path: string)
----@field addCComponent fun(self: BuildConfiguration, args: {sourceDirectory:string?, app: string?, cc: string?, ld: string?, cflags: string?, ldflags: string?}): {cc:BuildStepFactory, ld: BuildStepFactory}
+---@field addCComponent fun(self: BuildConfiguration, args: {sourceDirs:string?, app: string?, cc: string?, ld: string?, includes: string[]?, defines: string[]?, cflags: string?, ldflags: string?}): {cc: BuildStepFactory, ld: BuildStepFactory, object: string[], binary: string}
 
 
 ---@param extension string
@@ -24,6 +24,19 @@
 local toExtension = function(extension)
     return function(input)
         return input:gsub("%.[^.]+$", "." .. extension)
+    end
+end
+
+---@generic T : any?
+---@param element T
+---@return T[]
+local toList = function(element)
+    if element == nil then
+        return {}
+    elseif type(element) == "table" then
+        return element
+    else
+        return { element }
     end
 end
 
@@ -116,7 +129,7 @@ return {
                 end
                 return table.concat(result, " ")
             else
-                local start, end_index = path:find(base, 1, true)
+                local start, _ = path:find(base, 1, true)
                 if start == 1 then
                     return path
                 else
@@ -322,22 +335,35 @@ return {
                     }
                 end
 
-                self.env.cflags = args.cflags
-                self.env.ldflags = args.ldflags
+                self.env.cflags = args.cflags or ""
+                self.env.ldflags = args.ldflags or ""
+
+                local includes = toList(args.includes)
+                for _, include in ipairs(includes) do
+                    self.env.cflags = self.env.cflags .. " -I" .. include
+                end
+
+                local defines = toList(args.defines)
+                for _, define in ipairs(defines) do
+                    self.env.cflags = self.env.cflags .. " -D" .. define
+                end
+
 
                 local cc = self:getRule("cc")
                 local ld = self:getRule("ld")
 
                 local compileC = function(path)
-                    return self:step(cc {
+                    return self:step((cc {
                         input = path,
                         target = toExtension("o")
-                    })
+                    }))
                 end
                 local objects = {}
 
-                if args.sourceDirectory then
-                    for _, source in pairs(listFilesOfType(args.sourceDirectory, "c")) do
+                local sourceDirs = toList(args.sourceDirs)
+
+                for _, sourceDir in ipairs(sourceDirs) do
+                    for _, source in pairs(listFilesOfType(sourceDir, "c")) do
                         local object = compileC(source)
                         table.insert(objects, object)
                     end
@@ -345,10 +371,10 @@ return {
 
                 local binary = nil
                 if args.app and #objects > 0 then
-                    binary = self:step(ld {
+                    binary = self:step((ld {
                         input = objects,
                         target = args.app,
-                    })
+                    }))
                 end
 
                 return { cc = cc, ld = ld, objects = objects, binary = binary }
